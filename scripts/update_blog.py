@@ -1,46 +1,105 @@
 import feedparser
-import git
 import os
+import re
 
-# 벨로그 RSS 피드 URL
-# example : rss_url = 'https://api.velog.io/rss/@rimgosu'
-rss_url = 'https://api.velog.io/rss/@hyeonminee'
+# Velog RSS 주소
+RSS_URL = "https://api.velog.io/rss/@hyeonminee"
 
-# 깃허브 레포지토리 경로
-repo_path = '.'
+# 글이 저장될 디렉터리
+POSTS_DIR = "velog-posts"
 
-# 'velog-posts' 폴더 경로
-posts_dir = os.path.join(repo_path, 'velog-posts')
 
-# 'velog-posts' 폴더가 없다면 생성
-if not os.path.exists(posts_dir):
-    os.makedirs(posts_dir)
+def sanitize_filename(title):
+    """
+    GitHub 파일명으로 사용하기 어려운 문자를 제거/변환
+    """
+    filename = re.sub(r'[\\/:*?"<>|]', "-", title)
+    filename = re.sub(r"\s+", " ", filename).strip()
 
-# 레포지토리 로드
-repo = git.Repo(repo_path)
+    return filename + ".md"
 
-# RSS 피드 파싱
-feed = feedparser.parse(rss_url)
 
-# 각 글을 파일로 저장하고 커밋
-for entry in feed.entries:
-    # 파일 이름에서 유효하지 않은 문자 제거 또는 대체
-    file_name = entry.title
-    file_name = file_name.replace('/', '-') # 슬래시를 대시로 대체
-    file_name = file_name.replace('\\', '-' # 백슬래시를 대시로 대체
-    # 필요에 따라 추가 문자 대체
-    file_name += '.md'
-    file_path = os.path.join(posts_dir, file_name)
+def make_post_content(entry):
+    """
+    RSS 정보를 Markdown 파일 형태로 구성
+    """
 
-    # 파일이 이미 존재하지 않으면 생성
-    if not os.path.exists(file_path):
-        with open(file_path, 'w', encoding='utf-8') as file:
-            file.write(entry.description) # 글 내용을 파일에 작성
+    title = entry.get("title", "Untitled")
+    link = entry.get("link", "")
+    published = entry.get("published", "")
+    description = entry.get("description", "")
 
-        # 깃허브 커밋
-        repo.git.add(file_path)
-        repo.git.commit('-m', f'Add post: {entry.title}')
+    return f"""# {title}
 
-# 변경 사항을 깃허브에 푸시
-repo.git.push()
-    
+> Velog 원문: {link}
+
+- 작성일: {published}
+
+---
+
+{description}
+"""
+
+
+def main():
+    os.makedirs(POSTS_DIR, exist_ok=True)
+
+    print(f"Fetching Velog RSS: {RSS_URL}")
+
+    feed = feedparser.parse(RSS_URL)
+
+    if feed.bozo:
+        print(f"RSS parsing warning: {feed.bozo_exception}")
+
+    if not feed.entries:
+        print("No Velog posts found.")
+        return
+
+    print(f"Found {len(feed.entries)} posts.")
+
+    created = 0
+    updated = 0
+    unchanged = 0
+
+    for entry in feed.entries:
+        title = entry.get("title", "Untitled")
+
+        filename = sanitize_filename(title)
+        filepath = os.path.join(POSTS_DIR, filename)
+
+        new_content = make_post_content(entry)
+
+        # 기존 글이 존재하는 경우 내용 비교
+        if os.path.exists(filepath):
+            with open(filepath, "r", encoding="utf-8") as file:
+                old_content = file.read()
+
+            # Velog에서 글이 수정된 경우 GitHub 파일도 갱신
+            if old_content != new_content:
+                with open(filepath, "w", encoding="utf-8") as file:
+                    file.write(new_content)
+
+                print(f"Updated: {title}")
+                updated += 1
+
+            else:
+                print(f"Unchanged: {title}")
+                unchanged += 1
+
+        # 새로운 글
+        else:
+            with open(filepath, "w", encoding="utf-8") as file:
+                file.write(new_content)
+
+            print(f"Created: {title}")
+            created += 1
+
+    print()
+    print("===== Result =====")
+    print(f"Created   : {created}")
+    print(f"Updated   : {updated}")
+    print(f"Unchanged : {unchanged}")
+
+
+if __name__ == "__main__":
+    main()
